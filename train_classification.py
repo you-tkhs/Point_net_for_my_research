@@ -48,7 +48,7 @@ def inplace_relu(m):
     if classname.find('ReLU') != -1:
         m.inplace=True
 
-
+#検証用関数
 def test(model, loader, num_class=40):
     mean_correct = []
     class_acc = np.zeros((num_class, 3))

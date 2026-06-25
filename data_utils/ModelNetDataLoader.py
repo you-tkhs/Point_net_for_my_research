@@ -60,9 +60,11 @@ class ModelNetDataLoader(Dataset):
         else:
             self.catfile = os.path.join(self.root, 'modelnet40_shape_names.txt')
 
+        #(10 or 40)クラスの名前を取得
         self.cat = [line.rstrip() for line in open(self.catfile)]
         self.classes = dict(zip(self.cat, range(len(self.cat))))
 
+        #訓練データ・テストデータの名前を取得
         shape_ids = {}
         if self.num_category == 10:
             shape_ids['train'] = [line.rstrip() for line in open(os.path.join(self.root, 'modelnet10_train.txt'))]
@@ -71,12 +73,16 @@ class ModelNetDataLoader(Dataset):
             shape_ids['train'] = [line.rstrip() for line in open(os.path.join(self.root, 'modelnet40_train.txt'))]
             shape_ids['test'] = [line.rstrip() for line in open(os.path.join(self.root, 'modelnet40_test.txt'))]
 
+        
+        #各データにおいて数字を排除し、(クラス名、実際のファイルの絶対パス)というリストに整形
         assert (split == 'train' or split == 'test')
         shape_names = ['_'.join(x.split('_')[0:-1]) for x in shape_ids[split]]
         self.datapath = [(shape_names[i], os.path.join(self.root, shape_names[i], shape_ids[split][i]) + '.txt') for i
                          in range(len(shape_ids[split]))]
         print('The size of %s data is %d' % (split, len(self.datapath)))
 
+        
+        #データ構造によって変化する処理内容
         if self.uniform:
             self.save_path = os.path.join(root, 'modelnet%d_%s_%dpts_fps.dat' % (self.num_category, split, self.npoints))
         else:
@@ -116,11 +122,13 @@ class ModelNetDataLoader(Dataset):
         if self.process_data:
             point_set, label = self.list_of_points[index], self.list_of_labels[index]
         else:
+            #それぞれの入力データにおけるクラス名と辞書を対応させてラベルに変換する
             fn = self.datapath[index]
             cls = self.classes[self.datapath[index][0]]
             label = np.array([cls]).astype(np.int32)
             point_set = np.loadtxt(fn[1], delimiter=',').astype(np.float32)
 
+            #Trainerで指定された点群数に整形。デフォルトでは1024。uniformを指定するとFPSが呼び出され形状を維持したまま1024点が抽出される
             if self.uniform:
                 point_set = farthest_point_sample(point_set, self.npoints)
             else:
@@ -130,7 +138,7 @@ class ModelNetDataLoader(Dataset):
         if not self.use_normals:
             point_set = point_set[:, 0:3]
 
-        return point_set, label[0]
+        return point_set, label[0]#点群データとラベルを出力
 
     def __getitem__(self, index):
         return self._get_item(index)
