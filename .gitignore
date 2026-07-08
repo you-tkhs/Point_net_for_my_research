@@ -4,3 +4,8 @@ data/
 #for claud code
 todo.md
 Claude.md
+
+#training artifacts
+log/
+__pycache__/
+*.pyc

@@ -19,4 +19,6 @@ COPY . /workspace
 
 # Pythonライブラリのインストール
 # plyfile: data_utils/RicePaddyDataLoader.py が .ply ファイル読み込みに使用
-RUN pip install --no-cache-dir tqdm matplotlib scikit-learn plyfile
+# numpy<2: ベースイメージのtorch(2.0.1)はNumPy 1.x向けにビルドされているため、
+#          バージョン指定なしでpip installするとNumPy 2系に上がりABI不整合でクラッシュする
+RUN pip install --no-cache-dir "numpy<2" tqdm matplotlib scikit-learn plyfile
