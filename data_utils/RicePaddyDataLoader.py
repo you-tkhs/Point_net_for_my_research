@@ -111,8 +111,28 @@ def _build_year_index(year_dir, year_label):
     return records
 
 
+def _compute_year_stats(samples):
+    '''
+    年ごとの収量の平均・標準偏差を計算する。
+    年度によって収量の水準(値域)が大きく異なるため、年度ごとに標準化して
+    「その年の中での相対的な収量の高低」をモデルに学習させやすくするために使う。
+    標準偏差が実質0になるケース(理論上想定していないが)はゼロ割を避けるため下限を設ける。
+    '''
+    by_year = {}
+    for record in samples:
+        by_year.setdefault(record['year'], []).append(record['yield'])
+
+    year_stats = {}
+    for year, values in by_year.items():
+        values = np.array(values, dtype=np.float64)
+        mean = float(values.mean())
+        std = float(values.std())
+        year_stats[year] = (mean, max(std, 1e-6))
+    return year_stats
+
+
 class RicePaddyDataLoader(Dataset):
-    def __init__(self, root, split='train', years=None, npoints=4096, split_ratio=0.8, seed=42):
+    def __init__(self, root, split='train', years=None, npoints=4096, split_ratio=0.8, seed=42, year_stats=None):
         assert split in ('train', 'val')
         self.npoints = npoints
 
@@ -139,6 +159,13 @@ class RicePaddyDataLoader(Dataset):
 
             selected_idx = train_idx if split == 'train' else val_idx
             self.samples.extend(year_records[i] for i in selected_idx)
+
+        # year_statsを渡さない場合はこのsplit自身のサンプルから計算する（単体テスト用のデフォルト動作）。
+        # 正しい評価のためには、valはtrainのyear_statsをそのまま渡して使うこと
+        # （valの分布を統計量に混ぜてしまうとリークになるため）。
+        if year_stats is None:
+            year_stats = _compute_year_stats(self.samples)
+        self.year_stats = year_stats
 
         print('The size of %s data is %d' % (split, len(self.samples)))
 
@@ -167,10 +194,14 @@ class RicePaddyDataLoader(Dataset):
 
         point_set = pc_normalize(point_set)
 
-        # 回帰モデルの出力 [B, 1] と nn.MSELoss で次元を一致させるため形状を (1,) にする
-        yield_value = np.array([record['yield']], dtype=np.float32)
+        # target = [生の収量値, その年のtrain平均, その年のtrain標準偏差]
+        # 標準化(loss用)・逆標準化(指標算出用)は呼び出し側(train_regression.py)で行う。
+        # ここでまとめて返すのは、バッチ内に複数の年が混在してもサンプルごとに正しい
+        # year_statsを使って標準化/逆標準化できるようにするため。
+        year_mean, year_std = self.year_stats[record['year']]
+        target = np.array([record['yield'], year_mean, year_std], dtype=np.float32)
 
-        return point_set.astype(np.float32), yield_value
+        return point_set.astype(np.float32), target
 
 
 if __name__ == '__main__':
@@ -180,6 +211,6 @@ if __name__ == '__main__':
     DataLoader = torch.utils.data.DataLoader(data, batch_size=8, shuffle=True)
     for point, target in DataLoader:
         print(point.shape)
-        print(target.shape)
+        print(target.shape)  # [B, 3] = [生の収量値, 年平均, 年標準偏差]
         print(target)
         break

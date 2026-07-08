@@ -106,8 +106,15 @@ def evaluate(model, loader, args):
         points = points.transpose(2, 1)
         pred, _ = model(points)
 
-        preds.append(pred.detach().cpu().numpy())
-        targets.append(target.detach().cpu().numpy())
+        # target = [生の収量値, 年平均, 年標準偏差]。予測は標準化スケールなので、
+        # 元のg/m²スケールに戻してからMAE/RMSE/R2を計算する（学習前の生の指標とそのまま比較できるようにするため）
+        target_raw = target[:, 0:1]
+        year_mean = target[:, 1:2]
+        year_std = target[:, 2:3]
+        pred_raw = pred.detach() * year_std + year_mean
+
+        preds.append(pred_raw.cpu().numpy())
+        targets.append(target_raw.detach().cpu().numpy())
 
     return _compute_metrics(targets, preds)
 
@@ -154,8 +161,10 @@ def main(args):
     # train/valは同じ root・split_ratio・seed で呼び出すこと（分割が食い違うとvalがtrainに漏れる）
     train_dataset = RicePaddyDataLoader(root=args.data_root, split='train', npoints=args.num_point,
                                          split_ratio=args.split_ratio, seed=args.seed)
+    # valのyear_statsは必ずtrain側のものを渡す（val自身の分布を統計量に混ぜるとリークになるため）
     val_dataset = RicePaddyDataLoader(root=args.data_root, split='val', npoints=args.num_point,
-                                       split_ratio=args.split_ratio, seed=args.seed)
+                                       split_ratio=args.split_ratio, seed=args.seed,
+                                       year_stats=train_dataset.year_stats)
     trainDataLoader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, drop_last=True)
     valDataLoader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
 
@@ -226,14 +235,23 @@ def main(args):
             if not args.use_cpu:
                 points, target = points.cuda(), target.cuda()
 
+            # target = [生の収量値, 年平均, 年標準偏差]。年ごとの水準差を取り除くため、
+            # lossは標準化スケール((raw - mean) / std)で計算する
+            target_raw = target[:, 0:1]
+            year_mean = target[:, 1:2]
+            year_std = target[:, 2:3]
+            target_std = (target_raw - year_mean) / year_std
+
             pred, trans_feat = regressor(points)
-            loss = criterion(pred, target, trans_feat)
+            loss = criterion(pred, target_std, trans_feat)
             loss.backward()
             optimizer.step()
             global_step += 1
 
-            train_preds.append(pred.detach().cpu().numpy())
-            train_targets.append(target.detach().cpu().numpy())
+            # 指標算出はg/m²の生スケールに戻して行う（標準化前と同じ単位で比較できるようにするため）
+            pred_raw = pred.detach() * year_std + year_mean
+            train_preds.append(pred_raw.cpu().numpy())
+            train_targets.append(target_raw.detach().cpu().numpy())
 
         train_mae, train_rmse, train_r2 = _compute_metrics(train_targets, train_preds)
         # augmentation適用後・trainモードでの参考値（楽観的/ノイズを含む。分類スクリプトのtrain accuracyと同じ位置づけ）
@@ -254,6 +272,7 @@ def main(args):
                     'val_mae': val_mae,
                     'val_rmse': val_rmse,
                     'val_r2': val_r2,
+                    'year_stats': train_dataset.year_stats,  # 標準化に使った年ごとの平均・標準偏差（推論時の逆標準化に必要）
                     'model_state_dict': regressor.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                 }
