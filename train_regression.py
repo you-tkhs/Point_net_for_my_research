@@ -40,6 +40,10 @@ def parse_args():
     parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer for training')
     parser.add_argument('--log_dir', type=str, default=None, help='experiment root')
     parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
+    parser.add_argument('--lr_step_size', type=int, default=20,
+                         help='学習率をgamma倍に減衰させる間隔(epoch数)。train_classification.pyから流用した値(20)がデフォルトだが、'
+                              'これは元々200epoch・約1万件のデータ用に選ばれた値で、このタスクのデータ規模・epoch数に合わせた検証はしていない')
+    parser.add_argument('--lr_gamma', type=float, default=0.7, help='学習率減衰の倍率(StepLRのgamma)')
     parser.add_argument('--seed', type=int, default=42, help='random seed for train/val split (train/valで必ず同じ値を使うこと)')
     parser.add_argument('--data_root', type=str, default='data', help='root directory containing data/{year}/')
     parser.add_argument('--split_ratio', type=float, default=0.9, help='train split ratio (学習データが372件と少ないため9:1をデフォルトにしている)')
@@ -204,7 +208,7 @@ def _train_one_fold(args, model_module, train_dataset, val_dataset, checkpoints_
     else:
         optimizer = torch.optim.SGD(regressor.parameters(), lr=0.01, momentum=0.9)
 
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.lr_step_size, gamma=args.lr_gamma)
     global_epoch = 0
     global_step = 0
 
