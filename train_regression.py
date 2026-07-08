@@ -1,5 +1,6 @@
 import os
 import sys
+import csv
 import torch
 import numpy as np
 
@@ -12,6 +13,10 @@ import argparse
 from pathlib import Path
 from tqdm import tqdm
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+import matplotlib
+matplotlib.use('Agg')  # コンテナに$DISPLAYが無いため画面表示なしのバックエンドを使う
+import matplotlib.pyplot as plt
 
 from data_utils.RicePaddyDataLoader import RicePaddyDataLoader
 
@@ -54,6 +59,41 @@ def _compute_metrics(targets, preds):
     rmse = np.sqrt(mean_squared_error(targets, preds))
     r2 = r2_score(targets, preds)
     return mae, rmse, r2
+
+
+METRICS_FIELDS = ['epoch', 'train_mae', 'train_rmse', 'train_r2', 'val_mae', 'val_rmse', 'val_r2']
+
+
+def _load_metrics_csv(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        return [{k: (int(v) if k == 'epoch' else float(v)) for k, v in row.items()} for row in reader]
+
+
+def _write_metrics_csv(history, path):
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=METRICS_FIELDS)
+        writer.writeheader()
+        writer.writerows(history)
+
+
+def _plot_learning_curve(history, save_path):
+    epochs = [row['epoch'] for row in history]
+    fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
+
+    for ax, metric, ylabel in zip(axes, ['mae', 'rmse', 'r2'], ['MAE', 'RMSE', 'R2']):
+        ax.plot(epochs, [row['train_' + metric] for row in history], label='train')
+        ax.plot(epochs, [row['val_' + metric] for row in history], label='val')
+        ax.set_ylabel(ylabel)
+        ax.legend()
+        ax.grid(True)
+
+    axes[-1].set_xlabel('epoch')
+    fig.tight_layout()
+    fig.savefig(save_path)
+    plt.close(fig)
 
 
 def evaluate(model, loader, args):
@@ -144,6 +184,10 @@ def main(args):
         start_epoch = 0
         best_val_mae = float('inf')
 
+    metrics_csv_path = str(log_dir / 'metrics.csv')
+    learning_curve_path = str(log_dir / 'learning_curve.png')
+    history = _load_metrics_csv(metrics_csv_path)
+
     if args.optimizer == 'Adam':
         optimizer = torch.optim.Adam(
             regressor.parameters(),
@@ -216,6 +260,15 @@ def main(args):
                 torch.save(state, savepath)
 
             log_string('Best Val MAE: %f (epoch %d)' % (best_val_mae, best_epoch))
+
+            history.append({
+                'epoch': epoch + 1,
+                'train_mae': train_mae, 'train_rmse': train_rmse, 'train_r2': train_r2,
+                'val_mae': val_mae, 'val_rmse': val_rmse, 'val_r2': val_r2,
+            })
+            _write_metrics_csv(history, metrics_csv_path)
+            _plot_learning_curve(history, learning_curve_path)
+
             global_epoch += 1
 
     logger.info('End of training...')
