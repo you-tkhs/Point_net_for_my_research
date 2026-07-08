@@ -79,6 +79,14 @@ def _write_metrics_csv(history, path):
         writer.writerows(history)
 
 
+def _write_year_stats_csv(year_stats, path):
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=['year', 'mean', 'std'])
+        writer.writeheader()
+        for year, (mean, std) in sorted(year_stats.items()):
+            writer.writerow({'year': year, 'mean': mean, 'std': std})
+
+
 def _plot_learning_curve(history, save_path):
     epochs = [row['epoch'] for row in history]
     fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
@@ -167,6 +175,9 @@ def main(args):
                                        year_stats=train_dataset.year_stats)
     trainDataLoader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, drop_last=True)
     valDataLoader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
+
+    log_string('Year stats (train mean/std used for standardization): %s' % train_dataset.year_stats)
+    _write_year_stats_csv(train_dataset.year_stats, str(log_dir / 'year_stats.csv'))
 
     '''MODEL LOADING'''
     model = importlib.import_module(args.model)
