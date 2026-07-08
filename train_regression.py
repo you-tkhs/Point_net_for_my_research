@@ -43,6 +43,8 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42, help='random seed for train/val split (train/valで必ず同じ値を使うこと)')
     parser.add_argument('--data_root', type=str, default='data', help='root directory containing data/{year}/')
     parser.add_argument('--split_ratio', type=float, default=0.9, help='train split ratio (学習データが372件と少ないため9:1をデフォルトにしている)')
+    parser.add_argument('--no_standardize', action='store_true', default=False,
+                         help='収量値の年度ごと標準化を無効にし、生のg/m²スケールのままlossを計算する（標準化前のbaselineとの比較用）')
     return parser.parse_args()
 
 
@@ -114,12 +116,17 @@ def evaluate(model, loader, args):
         points = points.transpose(2, 1)
         pred, _ = model(points)
 
-        # target = [生の収量値, 年平均, 年標準偏差]。予測は標準化スケールなので、
-        # 元のg/m²スケールに戻してからMAE/RMSE/R2を計算する（学習前の生の指標とそのまま比較できるようにするため）
+        # target = [生の収量値, 年平均, 年標準偏差]。
+        # --no_standardizeの場合は予測も生スケールなのでそのまま使う。
+        # 標準化ありの場合は予測が標準化スケールなので、元のg/m²スケールに戻してから
+        # MAE/RMSE/R2を計算する（標準化前のbaselineとそのまま比較できるようにするため）
         target_raw = target[:, 0:1]
-        year_mean = target[:, 1:2]
-        year_std = target[:, 2:3]
-        pred_raw = pred.detach() * year_std + year_mean
+        if args.no_standardize:
+            pred_raw = pred.detach()
+        else:
+            year_mean = target[:, 1:2]
+            year_std = target[:, 2:3]
+            pred_raw = pred.detach() * year_std + year_mean
 
         preds.append(pred_raw.cpu().numpy())
         targets.append(target_raw.detach().cpu().numpy())
@@ -176,7 +183,7 @@ def main(args):
     trainDataLoader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, drop_last=True)
     valDataLoader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
 
-    log_string('Year stats (train mean/std used for standardization): %s' % train_dataset.year_stats)
+    log_string('Year stats (train mean/std, standardize=%s): %s' % (not args.no_standardize, train_dataset.year_stats))
     _write_year_stats_csv(train_dataset.year_stats, str(log_dir / 'year_stats.csv'))
 
     '''MODEL LOADING'''
@@ -246,21 +253,27 @@ def main(args):
             if not args.use_cpu:
                 points, target = points.cuda(), target.cuda()
 
-            # target = [生の収量値, 年平均, 年標準偏差]。年ごとの水準差を取り除くため、
-            # lossは標準化スケール((raw - mean) / std)で計算する
+            # target = [生の収量値, 年平均, 年標準偏差]。
+            # --no_standardizeの場合は生のg/m²スケールのままlossを計算する（標準化前のbaseline再現用）。
+            # デフォルトは年ごとの水準差を取り除くため、標準化スケール((raw - mean) / std)で計算する
             target_raw = target[:, 0:1]
-            year_mean = target[:, 1:2]
-            year_std = target[:, 2:3]
-            target_std = (target_raw - year_mean) / year_std
-
             pred, trans_feat = regressor(points)
-            loss = criterion(pred, target_std, trans_feat)
+
+            if args.no_standardize:
+                loss = criterion(pred, target_raw, trans_feat)
+                pred_raw = pred.detach()
+            else:
+                year_mean = target[:, 1:2]
+                year_std = target[:, 2:3]
+                target_std = (target_raw - year_mean) / year_std
+                loss = criterion(pred, target_std, trans_feat)
+                # 指標算出はg/m²の生スケールに戻して行う（標準化前と同じ単位で比較できるようにするため）
+                pred_raw = pred.detach() * year_std + year_mean
+
             loss.backward()
             optimizer.step()
             global_step += 1
 
-            # 指標算出はg/m²の生スケールに戻して行う（標準化前と同じ単位で比較できるようにするため）
-            pred_raw = pred.detach() * year_std + year_mean
             train_preds.append(pred_raw.cpu().numpy())
             train_targets.append(target_raw.detach().cpu().numpy())
 
@@ -283,6 +296,7 @@ def main(args):
                     'val_mae': val_mae,
                     'val_rmse': val_rmse,
                     'val_r2': val_r2,
+                    'standardized': not args.no_standardize,  # このチェックポイントが標準化ありで学習されたか
                     'year_stats': train_dataset.year_stats,  # 標準化に使った年ごとの平均・標準偏差（推論時の逆標準化に必要）
                     'model_state_dict': regressor.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
