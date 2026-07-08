@@ -132,9 +132,20 @@ def _compute_year_stats(samples):
 
 
 class RicePaddyDataLoader(Dataset):
-    def __init__(self, root, split='train', years=None, npoints=4096, split_ratio=0.8, seed=42, year_stats=None):
+    def __init__(self, root, split='train', years=None, npoints=4096, split_ratio=0.8, seed=42, year_stats=None,
+                 n_folds=None, fold=None):
+        '''
+        n_folds/fold を指定するとk分割交差検証モードになり、split_ratioは無視される。
+        年ごとにpermutationをn_folds個のブロックに分け、foldブロックをval、残りをtrainとする
+        (fold番号を変えて同じseedで呼び出せば、全ブロックを一巡できる)。
+        '''
         assert split in ('train', 'val')
         self.npoints = npoints
+
+        if (n_folds is None) != (fold is None):
+            raise ValueError('n_folds と fold は両方指定するか、両方省略してください')
+        if n_folds is not None and not (0 <= fold < n_folds):
+            raise ValueError('fold は 0以上n_folds未満で指定してください: n_folds=%d, fold=%d' % (n_folds, fold))
 
         if years is None:
             years = sorted(
@@ -153,9 +164,15 @@ class RicePaddyDataLoader(Dataset):
             year_records = _build_year_index(os.path.join(root, year), year)
 
             perm = rng.permutation(len(year_records))
-            n_train = int(round(split_ratio * len(year_records)))
-            train_idx = perm[:n_train]
-            val_idx = perm[n_train:]
+            if n_folds is not None:
+                folds = np.array_split(perm, n_folds)
+                val_idx = folds[fold]
+                train_idx = np.concatenate([folds[i] for i in range(n_folds) if i != fold]) \
+                    if n_folds > 1 else np.array([], dtype=perm.dtype)
+            else:
+                n_train = int(round(split_ratio * len(year_records)))
+                train_idx = perm[:n_train]
+                val_idx = perm[n_train:]
 
             selected_idx = train_idx if split == 'train' else val_idx
             self.samples.extend(year_records[i] for i in selected_idx)
