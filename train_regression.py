@@ -54,7 +54,9 @@ def parse_args():
                               '2以上を指定すると、1回の実行でfold 0からn_folds-1までを自動的に順番に学習し、'
                               'fold毎のbest val指標をexp_dir直下のcv_summary.csvに集計する（--split_ratioは無視される）')
     parser.add_argument('--use_normals', action='store_true', default=False,
-                         help='.plyに含まれる法線(nx,ny,nz)をxyzに続けて入力に加える(入力channel数が3から6になる)')
+                         help='.plyに含まれる法線(nx,ny,nz)をxyzに続けて入力に加える(入力channel数が3増える)')
+    parser.add_argument('--use_rgb', action='store_true', default=False,
+                         help='.plyに含まれる色(r,g,b)を[0,1]に正規化してxyzに続けて入力に加える(入力channel数が3増える)')
     return parser.parse_args()
 
 
@@ -170,7 +172,7 @@ def _train_one_fold(args, model_module, train_dataset, val_dataset, checkpoints_
     log_string('Year stats (train mean/std, standardize=%s): %s' % (not args.no_standardize, train_dataset.year_stats))
     _write_year_stats_csv(train_dataset.year_stats, str(log_dir / 'year_stats.csv'))
 
-    channel = 6 if args.use_normals else 3
+    channel = 3 + (3 if args.use_rgb else 0) + (3 if args.use_normals else 0)
     regressor = model_module.get_model(channel=channel)
     criterion = model_module.get_loss()
     regressor.apply(inplace_relu)
@@ -361,11 +363,12 @@ def main(args):
             log_string('Load dataset ...')
             train_dataset = RicePaddyDataLoader(root=args.data_root, split='train', npoints=args.num_point,
                                                  n_folds=args.n_folds, fold=fold, seed=args.seed,
-                                                 use_normals=args.use_normals)
+                                                 use_normals=args.use_normals, use_rgb=args.use_rgb)
             # valのyear_statsは必ずtrain側のものを渡す（val自身の分布を統計量に混ぜるとリークになるため）
             val_dataset = RicePaddyDataLoader(root=args.data_root, split='val', npoints=args.num_point,
                                                n_folds=args.n_folds, fold=fold, seed=args.seed,
-                                               year_stats=train_dataset.year_stats, use_normals=args.use_normals)
+                                               year_stats=train_dataset.year_stats,
+                                               use_normals=args.use_normals, use_rgb=args.use_rgb)
 
             best_val_mae, best_val_rmse, best_val_r2, _ = _train_one_fold(
                 args, model_module, train_dataset, val_dataset, checkpoints_dir, log_dir, logger, log_string)
@@ -402,11 +405,12 @@ def main(args):
         # train/valは同じ root・split_ratio・seed で呼び出すこと（分割が食い違うとvalがtrainに漏れる）
         train_dataset = RicePaddyDataLoader(root=args.data_root, split='train', npoints=args.num_point,
                                              split_ratio=args.split_ratio, seed=args.seed,
-                                             use_normals=args.use_normals)
+                                             use_normals=args.use_normals, use_rgb=args.use_rgb)
         # valのyear_statsは必ずtrain側のものを渡す（val自身の分布を統計量に混ぜるとリークになるため）
         val_dataset = RicePaddyDataLoader(root=args.data_root, split='val', npoints=args.num_point,
                                            split_ratio=args.split_ratio, seed=args.seed,
-                                           year_stats=train_dataset.year_stats, use_normals=args.use_normals)
+                                           year_stats=train_dataset.year_stats,
+                                           use_normals=args.use_normals, use_rgb=args.use_rgb)
 
         _train_one_fold(args, model_module, train_dataset, val_dataset, checkpoints_dir, log_dir, logger, log_string)
 

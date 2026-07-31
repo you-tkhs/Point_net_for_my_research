@@ -133,18 +133,20 @@ def _compute_year_stats(samples):
 
 class RicePaddyDataLoader(Dataset):
     def __init__(self, root, split='train', years=None, npoints=4096, split_ratio=0.8, seed=42, year_stats=None,
-                 n_folds=None, fold=None, use_normals=False):
+                 n_folds=None, fold=None, use_normals=False, use_rgb=False):
         '''
         n_folds/fold を指定するとk分割交差検証モードになり、split_ratioは無視される。
         年ごとにpermutationをn_folds個のブロックに分け、foldブロックをval、残りをtrainとする
         (fold番号を変えて同じseedで呼び出せば、全ブロックを一巡できる)。
 
-        use_normals=Trueにすると、.plyに含まれる法線(nx,ny,nz)をxyzに続けて返す
-        （返り値のpoint_setが[npoints, 3]から[npoints, 6]になる）。
+        use_normals=Trueにすると.plyに含まれる法線(nx,ny,nz)を、use_rgb=Trueにすると色(r,g,b)を、
+        それぞれxyzに続けて返す(常に xyz -> rgb -> normals の順で連結する。
+        両方Trueなら[npoints, 3]が[npoints, 9]になる)。
         '''
         assert split in ('train', 'val')
         self.npoints = npoints
         self.use_normals = use_normals
+        self.use_rgb = use_rgb
 
         if (n_folds is None) != (fold is None):
             raise ValueError('n_folds と fold は両方指定するか、両方省略してください')
@@ -199,6 +201,9 @@ class RicePaddyDataLoader(Dataset):
         plydata = PlyData.read(record['path'])
         vertex = plydata['vertex']
         xyz = np.stack([vertex['x'], vertex['y'], vertex['z']], axis=1).astype(np.float32)
+        if self.use_rgb:
+            # 0-255(uchar)の色を[0,1]に正規化する
+            rgb = np.stack([vertex['red'], vertex['green'], vertex['blue']], axis=1).astype(np.float32) / 255.0
         if self.use_normals:
             normals = np.stack([vertex['nx'], vertex['ny'], vertex['nz']], axis=1).astype(np.float32)
 
@@ -217,11 +222,15 @@ class RicePaddyDataLoader(Dataset):
 
         point_set = pc_normalize(point_set)
 
+        # rgb・法線はどちらも位置や大きさとは無関係(色・向き)なのでpc_normalizeの対象外とし、
+        # xyzと同じchoiceで対応する値をチャネル方向に連結するだけにする(常に xyz -> rgb -> normals の順)
+        extra_channels = []
+        if self.use_rgb:
+            extra_channels.append(rgb[choice, :])
         if self.use_normals:
-            # 法線は向き(単位ベクトル)なのでpc_normalizeの平行移動・スケーリングは適用しない
-            # (中心化・単位球化はxyzの絶対位置・大きさを消すためのものであり、法線の向きには無関係)。
-            # xyzと同じchoiceで対応する法線を選び、チャネル方向に連結する([npoints,3] -> [npoints,6])
-            point_set = np.concatenate([point_set, normals[choice, :]], axis=1)
+            extra_channels.append(normals[choice, :])
+        if extra_channels:
+            point_set = np.concatenate([point_set] + extra_channels, axis=1)
 
         # target = [生の収量値, その年のtrain平均, その年のtrain標準偏差]
         # 標準化(loss用)・逆標準化(指標算出用)は呼び出し側(train_regression.py)で行う。
